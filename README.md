@@ -1,5 +1,6 @@
 # Docker Compose Flask + PostgreSQL
 
+![CI](https://github.com/Bharani016/docker-compose-flask-postgres/actions/workflows/test.yml/badge.svg)
 ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat&logo=docker&logoColor=white)
 ![Docker Compose](https://img.shields.io/badge/Docker%20Compose-2496ED?style=flat&logo=docker&logoColor=white)
 ![Flask](https://img.shields.io/badge/Flask-000000?style=flat&logo=flask&logoColor=white)
@@ -61,10 +62,12 @@ A containerized Python Flask web application backed by PostgreSQL using Docker C
 1. Clone the repository and create your local environment file:
 
 ```bash
-git clone [https://github.com/Bharani016/docker-compose-flask-postgres.git](https://github.com/Bharani016/docker-compose-flask-postgres.git)
+git clone https://github.com/Bharani016/docker-compose-flask-postgres.git
 cd docker-compose-flask-postgres
 cp .env.example .env
 ```
+
+Edit `.env` and replace the placeholder password with your own strong value. The `.env` file is gitignored and must never be committed.
 
 2. Build and start the stack:
 
@@ -97,6 +100,10 @@ docker compose down        # Stop containers (preserves pgdata volume)
 docker compose down -v     # Stop containers and delete pgdata volume
 ```
 
+> **Note on passwords:** PostgreSQL reads `POSTGRES_PASSWORD` only the first time the database is created. If you change it in `.env` after the `pgdata` volume exists, the real database password does not change. Run `docker compose down -v` to delete the volume and start fresh.
+
+> **Note on port 8000:** If startup fails with `address already in use`, another process (for example a local Flask server) is using port 8000. Stop it, or change the host side of the port mapping in `docker-compose.yml`.
+
 ---
 
 ## Architecture & Compose Stack
@@ -124,15 +131,18 @@ The `Dockerfile` uses a two-stage build on `python:3.12-slim`:
 | Naive single-stage (`flask-app:naive`) | `python:3.12` | 1.65 GB | 428 MB | — |
 | Multi-stage (`flask-app:multistage`) | `python:3.12-slim` | **222 MB** | **54.2 MB** | **~86.5% smaller** |
 
+Dependencies are copied and installed before the application code, so editing `app/` does not trigger a full dependency reinstall on rebuild.
+
 ---
 
 ## Security Hardening
 
 - **Non-root execution:** Creates `appuser` (`uid=1000`) and runs the container via `USER appuser` with `--chown=appuser:appuser`.
 - **Externalized credentials:** Database credentials are loaded at runtime from a gitignored `.env` file; only `.env.example` with placeholders is committed.
-- **Zero secrets in image layers:** Verified via `docker inspect` and `docker history --no-trunc`.
+- **Zero secrets in image layers:** Verified with `docker history --no-trunc` searched for `pass`, `secret` and `token` (no matches).
 - **Network isolation:** PostgreSQL port `5432` is never published to the host machine.
-- **Build context hygiene:** `.dockerignore` excludes `.git`, `.venv`, `__pycache__`, `.env`, `tests/`, and `assets/`.
+- **Build context hygiene:** `.dockerignore` excludes `.git`, `.venv`, `__pycache__`, `.env`, `tests/`, and `assets/`, keeping the build context to a few kilobytes.
+- **Production server:** Gunicorn replaces Flask's development server, and `/health` returns a generic `unavailable` message instead of leaking connection details.
 
 ---
 
@@ -172,7 +182,7 @@ The `Dockerfile` uses a two-stage build on `python:3.12-slim`:
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate        # fish: source .venv/bin/activate.fish
 pip install -r requirements-dev.txt
 
 python -m flake8 app tests
@@ -202,12 +212,27 @@ docker rm -f flask-test
 
 GitHub Actions (`.github/workflows/test.yml`) runs automatically on every push and pull request to `main`:
 
-- **Matrix:** Python `3.10`, `3.11`, `3.12` (with `pip` caching)
+- **Matrix:** Python `3.10`, `3.11`, `3.12` (with `pip` caching on both requirements files)
 - **Linting:** `flake8 app tests`
 - **Formatting:** `black --check app tests`
-- **Tests:** `pytest -v`
+- **Tests:** `pytest -v` (database calls are mocked, so no Postgres is needed in CI)
 
 Branch protection requires all three matrix checks to pass before merging into `main`.
+
+---
+
+## Git Workflow
+
+Every change followed one branch per job, a pull request with review, a merge, and branch deletion:
+
+| Branch | Purpose |
+|--------|---------|
+| `feature/web-app` | Flask app and unit tests |
+| `ci/add-workflow` | Multi-version CI pipeline |
+| `feature/dockerfile` | Multi-stage Dockerfile and `.dockerignore` |
+| `feature/compose` | Docker Compose with Postgres |
+| `feature/security-hardening` | Non-root user and `.env` credentials |
+| `docs/readme-evidence` | README and screenshots |
 
 ---
 
